@@ -60,7 +60,8 @@ async def CreateRlay(request: Request) -> Response:
 
         if channel_id not in channel_store:
             channel_store[channel_id] = RelayAgent(host_ip, data)
-            return Response(body=f"Channe: {channel_id}", status=201)
+            data = {"channel": channel_id}
+            return Response(body=json.dumps(data), status=201)
         else:
             return Response(body="Client already exists", status=409)
     else:
