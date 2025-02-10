@@ -24,10 +24,10 @@ class RelayAgent:
             return False
 
     def GetMessage(self, ip: str):
-        if ip == self.host and not self.client_queue.empty():
-            return self.client_queue.get()
-        elif ip == self.client and not self.host_queue.empty():
+        if ip == self.host and not self.host_queue.empty():
             return self.host_queue.get()
+        elif ip == self.client and not self.client_queue.empty():
+            return self.client_queue.get()
         else:
             return None
         
@@ -49,20 +49,26 @@ async def CreateRlay(request: Request) -> Response:
 
     if "channel" in data:
         channel_id = data["channel"]
-    else:
+        if channel_id in channel_store:
+            channel = channel_store[channel_id]
+            channel.AddClient(host_ip)
+            return Response(body=json.dumps(channel.settings), status=201)
+        else:
+            return Response(body="Channel not found", status=404)
+    elif "type" in data and "port" in data:
         channel_id = "12345"
 
-    if channel_id not in channel_store:
-        channel_store[channel_id] = RelayAgent(host_ip, data)
-    elif channel_id in channel_store:
-        channel_store[channel_id].AddClient(host_ip)
+        if channel_id not in channel_store:
+            channel_store[channel_id] = RelayAgent(host_ip, data)
+            return Response(body=f"Channe: {channel_id}", status=201)
+        else:
+            return Response(body="Client already exists", status=409)
     else:
-        return Response(body="Client already exists", status=409)
-    # Save the key_value_map to a database or file (this part is not implemented)
-    # For demonstration purposes, we will print the key_value_map
-    for k, v in channel_store.items():
-        print (f"Channel: {v} , host: {v.host} <-> clinet: {v.client}")
-    return Response(body=f"Channel Id: {channel_id}", status=201)
+        return Response(body="Invalid request", status=400)
+    # # Save the key_value_map to a database or file (this part is not implemented)
+    # # For demonstration purposes, we will print the key_value_map
+    # for k, v in channel_store.items():
+    #     print (f"Channel: {v} , host: {v.host} <-> clinet: {v.client}")
 
 # Define a function that will relay the request to the appropriate resource based on the key
 async def AddRelayMessage(request: Request) -> Response:
@@ -78,11 +84,12 @@ async def AddRelayMessage(request: Request) -> Response:
 
 # Define a function that will fetch the value of a resource based on the key
 async def GetRelayMessage(request: Request) -> Response:
-    channel = request.url.name
-    if channel in channel_store:
+    channel_id = request.url.name
+    if channel_id in channel_store:
+        channel = channel_store[channel_id]
         # Fetch the value from the client_ip
         # (this part is not implemented, but you can use aiohttp.ClientSession to send a request to the client_ip)
-        return Response(body=channel_store[channel].GetMessage(request.remote), status=200)
+        return Response(body=channel.GetMessage(request.remote), status=200)
     else:
         return Response(body="Key not found", status=404)
     
