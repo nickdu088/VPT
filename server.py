@@ -56,12 +56,11 @@ async def CreateRlay(request: Request) -> Response:
         else:
             return Response(body="Channel not found", status=404)
     elif "type" in data and "port" in data:
-        channel_id = "12345"
-
+        channel_id = "12345" # generate a unique channel id
         if channel_id not in channel_store:
             channel_store[channel_id] = RelayAgent(host_ip, data)
-            data = {"channel": channel_id}
-            return Response(body=json.dumps(data), status=201)
+            channel = {"channel": channel_id}
+            return Response(body=json.dumps(channel), status=201)
         else:
             return Response(body="Client already exists", status=409)
     else:
@@ -90,7 +89,8 @@ async def GetRelayMessage(request: Request) -> Response:
         channel = channel_store[channel_id]
         # Fetch the value from the client_ip
         # (this part is not implemented, but you can use aiohttp.ClientSession to send a request to the client_ip)
-        return Response(body=channel.GetMessage(request.remote), status=200)
+        msg = channel.GetMessage(request.remote)
+        return Response(body=msg, status=200)
     else:
         return Response(body="Key not found", status=404)
     
