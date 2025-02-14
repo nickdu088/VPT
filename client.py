@@ -72,44 +72,32 @@ def createClient(url: str, type: str, port: int):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python test.py -t <type> | -c <channel> | -p <port>")
+        print("Usage: python client.py -t <type> -p <port> | -c <channel>")
         sys.exit(1)
     
     parameters = sys.argv
-
+    settings = {}
     for i in range(1, len(parameters)):
         parameter = parameters[i]
-        if parameter == "-t":
+        if parameters[i] == "-t":
             if i + 1 >= len(parameters):
                 print("Usage: python test.py -t <type>")
                 sys.exit(1)
-            type_param = parameters[i + 1]
-            print(f"Type parameter received: {type_param}")
+            settings["type"] = parameters[i + 1].lower()
         elif parameter == "-c":
             if i + 1 >= len(parameters):
                 print("Usage: python test.py -c <channel>")
                 sys.exit(1)
-            channel_param = parameters[i + 1]
-            print(f"Channel parameter received: {channel_param}")
+            settings["channel"] = parameters[i + 1].lower()
         elif parameter == "-p":
             if i + 1 >= len(parameters):
                 print("Usage: python test.py -p <port>")
                 sys.exit(1)
-            port_param = parameters[i + 1]
-            print(f"Port parameter received: {port_param}")
+            settings["port"] = parameters[i + 1].lower()
 
-    params_dict = {}
-    for i in range(1, len(parameters)):
-        parameter = parameters[i]
-        if parameter == "-t" and i + 1 < len(parameters):
-            params_dict["type"] = parameters[i + 1]
-        elif parameter == "-c" and i + 1 < len(parameters):
-            params_dict["channel"] = parameters[i + 1]
-        elif parameter == "-p" and i + 1 < len(parameters):
-            params_dict["port"] = parameters[i + 1]
-
-    url = "http://192.168.0.60:8080"
-    response = requests.put(url, json=params_dict)
+    print(settings)
+    url = "http://192.168.0.110:8080"
+    response = requests.put(url, json=settings)
 
     if response.status_code > 299:
         print(f"Error from server {response.content}")
@@ -118,9 +106,9 @@ def main():
     data = response.json()
     if "channel" in data:
         url += f"/{data['channel']}"
-        createHost(url, params_dict['type'].lower(), int(params_dict['port']))
+        createHost(url, settings['type'].lower(), int(settings['port']))
     elif "type" in data and "port" in data:
-        url += f"/{params_dict['channel']}"
+        url += f"/{settings['channel']}"
         createClient(url, data['type'], int(data['port']))
 
 
