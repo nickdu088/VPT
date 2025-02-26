@@ -8,6 +8,7 @@ from uuid import uuid4
 import threading
 import argparse
 import logging
+import base64
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
@@ -32,12 +33,12 @@ class TunnelPersistentConnection:
 
     def get_channel_url(self):
         if self.id:
-            return self.get_url() + self.id
+            return self.get_url() + "/" + self.id
         else:
             return self.get_url()
     
     def get_url(self):
-        return "http://192.168.0.67:9999/"
+        return "http://192.168.0.1"
 
     def create(self):
         logg.info("Creating connection to remote tunnel")
@@ -59,8 +60,8 @@ class TunnelPersistentConnection:
             return False
 
     def forward(self, data):
-        headers = {"Content-Type": "application/octet-stream", "Accept": "*/*"}
-        response = self.session.put(url= self.get_channel_url(), data=data, headers=headers)
+        headers = {"Content-Type": "application/text"}
+        response = self.session.put(url= self.get_channel_url(), data=base64.b64encode(data), headers=headers)
         if (response.status_code == 200):
             logg.info("Data forwarded to remote tunnel")
             return True
@@ -72,8 +73,8 @@ class TunnelPersistentConnection:
     def receive(self):
         response = self.session.get(self.get_channel_url())
         data = response.content
-        if response.status_code == 200:
-            return data
+        if response.status_code == 200 and data:
+            return base64.b64decode(data)
         else: 
             return None
 
@@ -86,21 +87,15 @@ class TunnelPersistentConnection:
         sender = None
         while True:
             try:
-                response = self.session.get(self.get_channel_url())
-                if response.status_code == 200:
-                    data = response.content
-                    if data:
-                        logg.info("Data received from tunnel: %s" % data)
-                        if sender == None:
-                            logg.info("Creating sender")
-                            sender = TCPProxyClient("localhost", self.port, self)
-                            sender.start()
-                        sender.send(data)
-                    else:
-                        # logg.info("No data received")
-                        time.sleep(1)
+                data = self.receive()
+                if data:
+                    logg.info("Data received from tunnel: %s" % data)
+                    if sender == None:
+                        logg.info("Creating sender")
+                        sender = TCPProxyClient("localhost", self.port, self)
+                        sender.start()
+                    sender.send(data)
                 else:
-                    # logg.info("Fail to get data from remote tunnel")
                     time.sleep(1)
             except Exception as ex:
                 logg.error("Error Receiving Data: %s" % ex)
@@ -165,12 +160,8 @@ class TCPProxyServer(socketserver.TCPServer):
     def __init__(self, server_address, RequestHandlerClass, connection, bind_and_activate=True):
         super().__init__(server_address, RequestHandlerClass, bind_and_activate)
         self.connection = connection
-        self.handle_request
 
     def process_request(self, request, client_address):
-        # if not self.connection.create():
-        #     logg.error("Fail to establish connection")
-        #     self.finish()
         self.receiver = ReceiveThread(request, self.connection)
         self.receiver.start()
         return super().process_request(request, client_address)
@@ -180,6 +171,7 @@ class TCPProxyServer(socketserver.TCPServer):
         self.connection.forward(data)
 
     def shutdown_request(self, request):
+        self.connection.close()
         if self.receiver.is_alive():
             self.receiver.stop()
             # self.receiver.join()
@@ -223,6 +215,9 @@ class TCPProxyClient(threading.Thread):
 
     def stopped(self):
         return self._stop.is_set()
+
+    def close(self):
+        self.s.close()
 
 if __name__ == "__main__":
     """Parse argument from command line and start tunnel"""
