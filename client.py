@@ -266,7 +266,6 @@ if __name__ == "__main__":
             with TCPProxyServer(('', tunnelConnection.port), TCPProxyHandler, tunnelConnection) as server:
                 logg.info(f"Waiting for connection on port {tunnelConnection.port}...")
                 server.serve_forever()
-            tunnelConnection.close()
     elif args.remote:
         remote_addr = {"host": args.remote.split(":")[0], "port": args.remote.split(":")[1]}
         tunnelConnection = TunnelPersistentConnection(port = remote_addr['port'])
