@@ -84,6 +84,9 @@ function handleRequest() {
         case 'DELETE':
             handleDelete();
             break;
+        case 'HEAD':
+            handleHead();
+            break;
         default:
             header("HTTP/1.0 405 Method Not Allowed");
             break;
@@ -170,7 +173,13 @@ function handleDelete() {
         unset($_SESSION[$channel_id]);
     }
     header("HTTP/1.0 200 OK");
+}
 
+function handleHead() {
+
+    foreach ($_SESSION as $key=>$val)
+        echo $key."\r\n";
+    header("HTTP/1.0 200 OK");
 }
 
 handleRequest();
