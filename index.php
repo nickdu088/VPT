@@ -84,8 +84,8 @@ function handleRequest() {
         case 'DELETE':
             handleDelete();
             break;
-        case 'HEAD':
-            handleHead();
+        case 'OPTIONS':
+            handleOptions();
             break;
         default:
             header("HTTP/1.0 405 Method Not Allowed");
@@ -175,11 +175,9 @@ function handleDelete() {
     header("HTTP/1.0 200 OK");
 }
 
-function handleHead() {
-
+function handleOptions() {
     foreach ($_SESSION as $key=>$val)
         echo $key."\r\n";
-    header("HTTP/1.0 200 OK");
 }
 
 handleRequest();
