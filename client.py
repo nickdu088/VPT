@@ -17,7 +17,7 @@ BUFFER = 1024 * 50
 TUNNEL_URL = "http://192.168.0.67:9999"
 
 class TunnelConnection:
-  
+
     def __init__(self, connection_id: str = None, port: int = -1):
         self.id = connection_id
         self.port = port
@@ -86,19 +86,16 @@ class TunnelConnection:
                 id, data = self.receive()
                 if id and not data:
                     if id not in senders:
-                        logg.info("Creating sender")
+                        logg.info("Creating sender %s", id)
                         sender = TCPProxyClient(remote_addr, id, self)
                         sender.start()
                         senders[id] = sender
                     else:
-                        logg.info("Sender already exists")
+                        logg.info("Closing sender %s", id)
                         senders[id].stop()
-                        senders[id].join()
+                        #senders[id].join()
                         del senders[id]
-                if id and data:
-                    logg.info("Data received from tunnel: %s", data)
-                    if id not in senders:
-                        logg.error("Sender not found")
+                if id and data and id in senders:
                     senders[id].send(data)
                 else:
                     time.sleep(1)
@@ -120,7 +117,6 @@ class ReceiveThread(threading.Thread):
                 logg.info("Retrieving data from remote tunnel")
                 id, data = self.conn.receive()
                 if data:
-                    logg.info("Data received: %s", data)
                     self.client.send(id, data)
                 else:
                     time.sleep(1)
@@ -143,7 +139,6 @@ class TCPProxyHandler(socketserver.BaseRequestHandler):
                 if not data:
                     logg.info("Client's socket connection broken")
                     break
-                logg.info("Sending data: %s", data)
                 self.server.forward_request(data, str(self.request.__hash__()))
             except Exception as ex:
                 logg.error("Error: %s", ex)
@@ -190,20 +185,20 @@ class TCPProxyClient(threading.Thread):
     def __init__(self, remote_addr, id, connection):
         super().__init__(name="Client-Thread")
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.connection = connection
         self.id = id
         self.s.connect_ex((remote_addr['host'], int(remote_addr['port'])))
         self._stop = threading.Event()
-    
+
     def send(self, data):
         self.s.sendall(data)
 
     def run(self):
         try:
             while not self.stopped():
-                data = self.s.recv(BUFFER)  
+                data = self.s.recv(BUFFER)
                 if data:
-                    logg.info("Data received from tunnel: %s", data)
                     self.connection.forward(data, self.id)
                 else:
                     time.sleep(1)
