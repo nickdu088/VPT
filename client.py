@@ -216,7 +216,6 @@ class TCPProxyClient(threading.Thread):
 
     def stop(self):
         self._stop.set()
-        self.s.close()
 
     def stopped(self):
         return self._stop.is_set()
