@@ -8,12 +8,13 @@ import threading
 import argparse
 import logging
 import base64
+import lzma
 from typing import Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
-BUFFER = 1024 * 50
+BUFFER = 1024 * 128  # 128KB size buffer
 TUNNEL_URL = "http://192.168.0.67:9999"
 
 class TunnelConnection:
@@ -53,7 +54,11 @@ class TunnelConnection:
     def forward(self, data, id):
         with self.lock:
             headers = {"Content-Type": "application/json", "Accept": "text/plain"}
-            data_to_send = {"id": id, "data": base64.b64encode(data).decode()} if data else {"id": id}
+            if data:
+                data = lzma.compress(data)
+                data_to_send = {"id": id, "data": base64.b64encode(data).decode()}
+            else:
+                data_to_send = {"id": id}
             response = self.session.put(url=self.get_channel_url(), data=json.dumps(data_to_send), headers=headers)
             if response.status_code == 200:
                 logg.info("Data forwarded to remote tunnel")
@@ -69,7 +74,8 @@ class TunnelConnection:
                 data_received = response.json()
                 logg.info("Data received from remote tunnel")
                 if "id" in data_received and "data" in data_received:
-                    return data_received["id"], base64.b64decode(data_received["data"])
+                    compressed_data = base64.b64decode(data_received["data"])
+                    return data_received["id"], lzma.decompress(compressed_data)
                 elif "id" in data_received:
                     return data_received["id"], None
             return None, None
@@ -210,6 +216,7 @@ class TCPProxyClient(threading.Thread):
 
     def stop(self):
         self._stop.set()
+        self.s.close()
 
     def stopped(self):
         return self._stop.is_set()
