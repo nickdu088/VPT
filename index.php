@@ -27,14 +27,13 @@ class SessionTunnelInfoStorage implements TunnelInfoStorage {
     }
 }
 
-$tunnelStorage = new SessionTunnelInfoStorage();
-
 class ProxyTunnel {
     private $host;
     private $settings;
     private $client;
     private $host_queue;
     private $client_queue;
+    public $date_created;
 
     public function __construct($host, $settings) {
         $this->host = $host;
@@ -108,6 +107,8 @@ class ProxyTunnel {
 //     cleanUpSessions();
 //     $_SESSION['last_cleanup'] = time();
 // }
+
+$tunnelStorage = new SessionTunnelInfoStorage();
 
 function getClientIp() {
     return $_SERVER['HTTP_CLIENT_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'];
