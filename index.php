@@ -140,7 +140,7 @@ function handleRequest() {
 }
 
 function getChannelId() {
-    return trim(substr(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), 1));
+    return basename($_SERVER['REQUEST_URI']);
 }
 
 function getChannel() {
