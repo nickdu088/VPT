@@ -3,7 +3,7 @@ import json
 import socket
 import socketserver
 import time
-import requests
+import http.client
 import threading
 import argparse
 import logging
@@ -15,38 +15,41 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(l
 logg = logging.getLogger(__name__)
 
 BUFFER = 1024 * 128  # 128KB size buffer
-TUNNEL_URL = "http://192.168.0.67:9999"
+TUNNEL_URL = "192.168.0.67:9999"
 
 class TunnelConnection:
-
     def __init__(self, connection_id: str = None, port: int = -1):
         self.id = connection_id
         self.port = port
-        self.session = requests.Session()
-        self.session.verify = True
+        self.conn = None
         self.lock = threading.Lock()
 
     def get_settings(self):
         return json.dumps({"channel": self.id, "port": self.port})
 
     def get_channel_url(self):
-        return f"{TUNNEL_URL}/{self.id}" if self.id else TUNNEL_URL
+        return f"/{self.id}" if self.id else "/"
+
+    def connect_server(self):
+        host, port = TUNNEL_URL.split(":")
+        self.conn = http.client.HTTPConnection(host, int(port))
 
     def create(self):
         logg.info("Creating connection to remote tunnel")
-        headers = {"Content-Type": "application/json", "Accept": "text/plain"}
         try:
+            self.connect_server()
             data = self.get_settings()
-            logg.info("Creating connection with settings: %s", data)
-            response = self.session.post(url=TUNNEL_URL, data=data, headers=headers)
-            if response.status_code == 200:
-                settings = response.json()
+            headers = {"Content-Type": "application/json", "Accept": "text/plain"}
+            self.conn.request("POST", "/", body=data, headers=headers)
+            response = self.conn.getresponse()
+            if response.status == 200:
+                settings = json.loads(response.read())
                 self.id = settings["channel"]
                 self.port = int(settings["port"])
                 logg.info('Successfully created connection: %s', self.get_settings())
                 return True
-            logg.warning('Failed to establish connection: status %s because %s', response.status_code, response.reason)
-            return False 
+            logg.warning('Failed to establish connection: status %s because %s', response.status, response.reason)
+            return False
         except Exception as ex:
             logg.error("Error Creating Connection: %s", ex)
             return False
@@ -59,8 +62,9 @@ class TunnelConnection:
                 data_to_send = {"id": id, "data": base64.b64encode(data).decode()}
             else:
                 data_to_send = {"id": id}
-            response = self.session.put(url=self.get_channel_url(), data=json.dumps(data_to_send), headers=headers)
-            if response.status_code == 200:
+            self.conn.request("PUT", self.get_channel_url(), body=json.dumps(data_to_send), headers=headers)
+            response = self.conn.getresponse()
+            if response.status == 200:
                 logg.info("Data forwarded to remote tunnel")
                 return True
             else:
@@ -69,21 +73,26 @@ class TunnelConnection:
 
     def receive(self) -> Tuple[str, bytes]:
         with self.lock:
-            response = self.session.get(self.get_channel_url())
-            if response.status_code == 200 and response.content:
-                data_received = response.json()
-                logg.info("Data received from remote tunnel")
-                if "id" in data_received and "data" in data_received:
-                    compressed_data = base64.b64decode(data_received["data"])
-                    return data_received["id"], lzma.decompress(compressed_data)
-                elif "id" in data_received:
-                    return data_received["id"], None
+            self.conn.request("GET", self.get_channel_url())
+            response = self.conn.getresponse()
+            if response.status == 200:
+                data_received = response.read()
+                if data_received:
+                    data_received = json.loads(data_received)
+                    logg.info("Data received from remote tunnel")
+                    if "id" in data_received and "data" in data_received:
+                        compressed_data = base64.b64decode(data_received["data"])
+                        return data_received["id"], lzma.decompress(compressed_data)
+                    elif "id" in data_received:
+                        return data_received["id"], None
             return None, None
 
     def close(self):
         logg.info("Closing connection to target at remote tunnel")
-        self.session.delete(self.get_channel_url())
-        self.session.close()
+        self.conn.request("DELETE", self.get_channel_url())
+        self.conn.getresponse()  # Clear the response
+        self.conn.close()
+        self.conn = None
 
     def run(self, remote_addr):
         senders = {}
