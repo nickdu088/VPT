@@ -31,8 +31,7 @@ class TunnelConnection:
         return f"/{self.id}" if self.id else "/"
 
     def connect_server(self):
-        host, port = TUNNEL_URL.split(":")
-        self.conn = http.client.HTTPConnection(host, int(port))
+        self.conn = http.client.HTTPConnection(TUNNEL_URL)
 
     def create(self):
         logg.info("Creating connection to remote tunnel")
@@ -64,6 +63,7 @@ class TunnelConnection:
                 data_to_send = {"id": id}
             self.conn.request("PUT", self.get_channel_url(), body=json.dumps(data_to_send), headers=headers)
             response = self.conn.getresponse()
+            response.read()  # Clear the response
             if response.status == 200:
                 logg.info("Data forwarded to remote tunnel")
                 return True
