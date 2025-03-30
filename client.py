@@ -54,38 +54,49 @@ class TunnelConnection:
             return False
 
     def forward(self, data, id):
-        with self.lock:
-            headers = {"Content-Type": "application/json", "Accept": "text/plain"}
-            if data:
-                data = lzma.compress(data)
-                data_to_send = {"id": id, "data": base64.b64encode(data).decode()}
-            else:
-                data_to_send = {"id": id}
-            self.conn.request("PUT", self.get_channel_url(), body=json.dumps(data_to_send), headers=headers)
-            response = self.conn.getresponse()
-            response.read()  # Clear the response
-            if response.status == 200:
-                logg.info("Data forwarded to remote tunnel")
-                return True
-            else:
-                logg.warning("Failed to forward data to remote tunnel: %s", response.reason)
-                return False
+        headers = {"Content-Type": "application/json", "Accept": "text/plain"}
+        if data:
+            data = lzma.compress(data)
+            data_to_send = {"id": id, "data": base64.b64encode(data).decode()}
+        else:
+            data_to_send = {"id": id}
+        for attempt in range(3):
+            try:
+                with self.lock:
+                    self.conn.request("PUT", self.get_channel_url(), body=json.dumps(data_to_send), headers=headers)
+                response = self.conn.getresponse()
+                response.read()  # Clear the response
+                if response.status == 200:
+                    logg.info("Data forwarded to remote tunnel")
+                    return True
+                else:
+                    logg.warning("Attempt %d: Failed to forward data to remote tunnel: %s", attempt + 1, response.reason)
+                    return False
+            except Exception as ex:
+                logg.error("Attempt %d: Error forwarding data: %s", attempt + 1, ex)
+                time.sleep(1)  # Wait before retrying
 
     def receive(self) -> Tuple[str, bytes]:
-        with self.lock:
-            self.conn.request("GET", self.get_channel_url())
-            response = self.conn.getresponse()
-            if response.status == 200:
-                data_received = response.read()
-                if data_received:
-                    data_received = json.loads(data_received)
-                    logg.info("Data received from remote tunnel")
-                    if "id" in data_received and "data" in data_received:
-                        compressed_data = base64.b64decode(data_received["data"])
-                        return data_received["id"], lzma.decompress(compressed_data)
-                    elif "id" in data_received:
-                        return data_received["id"], None
-            return None, None
+        for attempt in range(3):
+            try:
+                with self.lock:
+                    self.conn.request("GET", self.get_channel_url())
+                    response = self.conn.getresponse()
+                    if response.status == 200:
+                        data_received = response.read()
+                        if data_received:
+                            data_received = json.loads(data_received)
+                            logg.info("Data received from remote tunnel")
+                            if "id" in data_received and "data" in data_received:
+                                compressed_data = base64.b64decode(data_received["data"])
+                                return data_received["id"], lzma.decompress(compressed_data)
+                            elif "id" in data_received:
+                                return data_received["id"], None
+                return None, None
+            except Exception as ex:
+                logg.error("Attempt %d: Error receiving data: %s", attempt + 1, ex)
+                time.sleep(1)  # Wait before retrying
+        return None, None
 
     def close(self):
         logg.info("Closing connection to target at remote tunnel")
@@ -177,7 +188,7 @@ class TCPProxyServer(socketserver.ThreadingTCPServer):
             self.sockets[id].sendall(data)
 
     def forward_request(self, data, id):
-        self.tunnelConnection.forward(data, id)
+        return self.tunnelConnection.forward(data, id)
 
     def shutdown_request(self, request):
         id = str(request.__hash__())
