@@ -30,7 +30,7 @@ class TunnelConnection:
         return json.dumps({"channel": self.id, "port": self.port})
 
     def get_channel_url(self):
-        return f"{TUNNEL_URL}/{self.id}" if self.id else TUNNEL_URL
+        return f"{TUNNEL_URL}/{self.id if self.id else ''}"
 
     def create(self):
         logg.info("Creating connection to remote tunnel")
