@@ -37,7 +37,6 @@ class TunnelConnection:
         headers = {"Content-Type": "application/json", "Accept": "text/plain"}
         try:
             data = self.get_settings()
-            logg.info("Creating connection with settings: %s", data)
             response = self.session.post(url=TUNNEL_URL, data=data, headers=headers)
             if response.status_code == 200:
                 settings = response.json()
@@ -61,7 +60,7 @@ class TunnelConnection:
                 data_to_send = {"id": id}
             response = self.session.put(url=self.get_channel_url(), data=json.dumps(data_to_send), headers=headers)
             if response.status_code == 200:
-                logg.info("Data forwarded to remote tunnel")
+                logg.info("Data >> to remote tunnel")
                 return True
             else:
                 logg.warning("Failed to forward data to remote tunnel: %s", response.reason)
@@ -71,8 +70,8 @@ class TunnelConnection:
         with self.lock:
             response = self.session.get(self.get_channel_url())
             if response.status_code == 200 and response.content:
+                logg.info("Data << from remote tunnel")
                 data_received = response.json()
-                logg.info("Data received from remote tunnel")
                 if "id" in data_received and "data" in data_received:
                     compressed_data = base64.b64decode(data_received["data"])
                     return data_received["id"], lzma.decompress(compressed_data)
@@ -120,7 +119,6 @@ class ReceiveThread(threading.Thread):
     def run(self):
         while not self.stopped():
             try:
-                logg.info("Retrieving data from remote tunnel")
                 id, data = self.conn.receive()
                 if data:
                     self.client.send(id, data)
@@ -145,7 +143,7 @@ class TCPProxyHandler(socketserver.BaseRequestHandler):
                 if not data:
                     logg.info("Client's socket connection broken")
                     break
-                self.server.forward_request(data, str(self.request.__hash__()))
+                self.server.tunnelConnection.forward(data, str(self.request.__hash__()))
             except Exception as ex:
                 logg.error("Error: %s", ex)
                 break
@@ -166,9 +164,6 @@ class TCPProxyServer(socketserver.ThreadingTCPServer):
     def send(self, id, data):
         if id in self.sockets:
             self.sockets[id].sendall(data)
-
-    def forward_request(self, data, id):
-        self.tunnelConnection.forward(data, id)
 
     def shutdown_request(self, request):
         id = str(request.__hash__())
@@ -234,7 +229,6 @@ if __name__ == "__main__":
     if args.channel:
         tunnelConnection = TunnelConnection(connection_id=args.channel)
         if tunnelConnection.create():
-            logg.info("Connection established")
             with TCPProxyServer(('', tunnelConnection.port), TCPProxyHandler, tunnelConnection) as server:
                 logg.info(f"Waiting for connection on port {tunnelConnection.port}...")
                 server.serve_forever()
