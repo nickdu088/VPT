@@ -1,139 +1,160 @@
-#!/usr/bin/env python
-import json
-from queue import Queue
-from uuid import uuid4
-from aiohttp import web
-from aiohttp.web import Request, Response
 import argparse
+import uuid
+from aiohttp import web
+import asyncio
+from asyncio import Queue
 import logging
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
-class ProxyChannel:
-    def __init__(self, host, settings: dict):
+class TunnelInfoStorage:
+    def set_tunnel_info(self, channel_id, channel):
+        raise NotImplementedError
+
+    def get_tunnel_info(self, channel_id):
+        raise NotImplementedError
+
+    def delete_tunnel_info(self, channel_id):
+        raise NotImplementedError
+    
+class SessionTunnelInfoStorage(TunnelInfoStorage):
+    def __init__(self):
+        self.storage = {}
+
+    def set_tunnel_info(self, channel_id, channel):
+        self.storage[channel_id] = channel
+
+    def get_tunnel_info(self, channel_id):
+        return self.storage.get(channel_id)
+
+    def delete_tunnel_info(self, channel_id):
+        if channel_id in self.storage:
+            del self.storage[channel_id]
+
+tunnel_storage = SessionTunnelInfoStorage()
+
+class ProxyTunnel:
+    def __init__(self, host, settings):
         self.host = host
         self.settings = settings
         self.client = None
         self.host_queue = Queue()
         self.client_queue = Queue()
 
-    def SetClient(self, client):
-        if self.client is None:
-            self.client = client
-            return True
-        else:
-            return False
+    def get_settings(self):
+        return self.settings
 
-    def GetMessage(self, addr):
-        logg.info(f"Getting message from {addr}")
-        if addr == self.host and not self.host_queue.empty():
-            return self.host_queue.get()
-        elif addr == self.client and not self.client_queue.empty():
-            return self.client_queue.get()
-        else:
-            return None
-        
-    def AddMessage(self, addr, item):
-        logg.info(f"Adding message from {addr}: {item}")
-        if self.host == addr and not self.client_queue.full():
-            self.client_queue.put(item)
-            return True
-        elif self.client == addr and not self.host_queue.full():
-            self.host_queue.put(item)
-            return True
-        else:
-            return False
-    
+    def set_settings(self, settings):
+        self.settings = settings
 
-class ProxyRequestHandler():
+    def set_client(self, client):
+        self.client = client
+        return True
 
-    channels = {}
-    BUFFER = 1024 * 50 
+    async def get_message(self, addr):
+        queue = self.host_queue if addr == self.host else self.client_queue
+        item = await asyncio.wait_for(queue.get(), timeout=5)
+        queue.task_done()
+        return item
 
-    def _get_connection_id(self, request: Request):
-        return request.url.name
+    async def add_message(self, addr, msg):
+        queue = self.client_queue if addr == self.host else self.host_queue
+        await queue.put(msg)
 
-    def _get_channel(self, request: Request):
-        """get the socket which connects to the target address for this connection"""
-        id = self._get_connection_id(request)
-        return self.channels.get(id, None)
+async def handle_get(request):
+    channel = get_channel(request)
+    if channel:
+        response = web.StreamResponse(
+            status=200,
+            reason='OK',
+            headers={
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            },
+        )
+        await response.prepare(request)
 
-    def _get_request_address(self, request: Request):
-        return request.remote
-        # return request.transport.get_extra_info('peername')
+        try:
+            while True:
+                try:
+                    message = await channel.get_message(get_client_ip(request))
+                    await response.write(message)
+                except ConnectionResetError:
+                    break
+                except asyncio.TimeoutError:
+                    # logg.warning("Timeout waiting for message")
+                    if request.transport is None or request.transport.is_closing():
+                        break
+                    continue
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if request.transport is not None and not request.transport.is_closing():
+                await response.write_eof()
+        return web.Response(status=200, text="OK")
+    return web.Response(status=404, text="Resource not found")
 
-    def _close_channel(self, request: Request):
-        """ close the current socket"""
-        s = self._get_channel(request)
-        if s:
-            del s
+async def handle_post(request):
+    data = await request.json()
+    if 'channel' in data and data['channel']:
+        channel_id = data['channel']
+        channel = tunnel_storage.get_tunnel_info(channel_id)
+        if channel:
+            channel.set_client(get_client_ip(request))
+            return web.json_response(channel.get_settings())
+    elif 'port' in data and data['port'] != -1:
+        channel_id = str(uuid.uuid4())
+        settings = {
+            'channel': channel_id,
+            'port': data['port']
+        }
+        channel = ProxyTunnel(get_client_ip(request), settings)
+        tunnel_storage.set_tunnel_info(channel_id, channel)
+        return web.json_response(channel.get_settings())
+    return web.Response(status=404, text="Resource not found")
 
-    def do_GET(self, request: Request):
-        """GET: Read data from TargetAddress and return to client through http response"""
-        s = self._get_channel(request)
-        if s:
-            data = s.GetMessage(self._get_request_address(request))
-            logg.info('Data received from queue: %s' % data)
-            return Response(status=200, body=data if data else b'')
-        else:
-            logg.error('Connection With ID %s has not been established' % self._get_connection_id(request))
-            return Response(status=400)
+async def handle_put(request):
+    channel = get_channel(request)
+    if channel:
+        await channel.add_message(get_client_ip(request), await request.read())
+        return web.Response(status=200)
+    return web.Response(status=404, text="Resource not found")
 
-    async def do_POST(self, request: Request):
-        """POST: Create TCP Connection to the TargetAddress"""
-        logg.info('Initializing connection')
-        data = await request.json()
+def handle_delete(request):
+        channel_id = get_channel_id(request)
+        if channel_id:
+            tunnel_storage.delete_tunnel_info(channel_id)
+        return web.Response(status=200)
 
-        if "channel" in data and data["channel"]:
-            channel_id = data["channel"]
-            if channel_id in self.channels:
-                channel = self.channels[channel_id]
-                channel.SetClient(self._get_request_address(request))
-                return Response(body=json.dumps(channel.settings), status=200)
-            else:
-                return Response(body="Channel not found", status=404)
-        elif "port" in data and data["port"] != -1:
-            channel_id = str(uuid4())
-            if channel_id not in self.channels:
-                data["channel"] = channel_id
-                channel = ProxyChannel(self._get_request_address(request), data)
-                self.channels[channel_id] = channel
-                return Response(body=json.dumps(channel.settings), status=200)
-            else:
-                return Response(body="Client already exists", status=409)
-        else:
-            return Response(body="Invalid request", status=400)
+def handle_options():
+    return web.json_response(tunnel_storage.storage.keys())
 
-    async def do_PUT(self, request: Request):
-        """Read data from HTTP Request and send to TargetAddress"""
-        s = self._get_channel(request)
-        if not s:
-            logg.error("Connection with id %s doesn't exist" % id)
-            return Response(status=400)
-        data = await request.read()
-        # save the data in the queue
-        logg.info('Saving data .... %s' % data)
-        s.AddMessage(self._get_request_address(request), data)
-        return Response(status=200)
+def get_client_ip(request):
+    peername = request.transport.get_extra_info('peername')
+    if peername is not None:
+        return peername[0]
+    return None
 
-    def do_DELETE(self, request: Request): 
-        id = self._get_connection_id(request) 
-        logg.info('Closing connection with ID %s' % id)
-        if id is not None:
-            del self.channels[id]
-        return Response(status=200)
-        
+def get_channel_id(request):
+    channel_id = request.match_info.get('id')
+    return channel_id if channel_id else None
+
+def get_channel(request):
+    channel_id = get_channel_id(request)
+    return tunnel_storage.get_tunnel_info(channel_id)
 
 app = web.Application()
-app.router.add_get('/{id}', lambda request: ProxyRequestHandler().do_GET(request))
-app.router.add_post('/', lambda request: ProxyRequestHandler().do_POST(request))
-app.router.add_put('/{id}', lambda request: ProxyRequestHandler().do_PUT(request))
-app.router.add_delete('/{id}', lambda request: ProxyRequestHandler().do_DELETE(request))
+app.router.add_get('/{id}', handle_get)
+app.router.add_post('/', handle_post)
+app.router.add_put('/{id}', handle_put)
+app.router.add_delete('/{id}', handle_delete)
+app.router.add_options('/', handle_options)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start Tunnel Server")
-    parser.add_argument("-p", default=9999, dest='port', help='Specify port number server will listen to', type=int)
+    parser.add_argument("-p", default=8000, dest='port', help='Specify port number server will listen to', type=int)
     args = parser.parse_args()
     logg.info("Starting server on port %s" % args.port)
     web.run_app(app, host='0.0.0.0', port=args.port)
