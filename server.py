@@ -155,7 +155,7 @@ app.router.add_options('/', handle_options)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start Tunnel Server")
-    parser.add_argument("-p", default=443, dest='port', help='Specify port number server will listen to', type=int)
+    parser.add_argument("-p", default=8000, dest='port', help='Specify port number server will listen to', type=int)
     args = parser.parse_args()
     logg.info("Starting server on port %s" % args.port)
     web.run_app(app, host='0.0.0.0', port=args.port)
