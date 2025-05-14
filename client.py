@@ -60,19 +60,21 @@ class TunnelConnection:
                 buffer = b''
                 async for line, end_of_line in response.content.iter_chunks():
                     buffer += line
-                    if end_of_line and buffer != b'\n':
-                        logg.info("Data << from remote tunnel")
-                        try:
-                            data_received = json.loads(buffer)
-                            buffer = b''
-                            if "id" in data_received and "data" in data_received:
-                                compressed_data = base64.b64decode(data_received["data"])
-                                yield data_received["id"], lzma.decompress(compressed_data)
-                            elif "id" in data_received:
-                                yield data_received["id"], None
-                        except Exception as e:
-                            logg.error("Failed to decode JSON: %s ****** %s", line, e)
-
+                    if end_of_line:
+                        if buffer != b'\n':
+                            logg.info("Data << from remote tunnel")
+                            try:
+                                data_received = json.loads(buffer)
+                                if "id" in data_received and "data" in data_received:
+                                    compressed_data = base64.b64decode(data_received["data"])
+                                    yield data_received["id"], lzma.decompress(compressed_data)
+                                elif "id" in data_received:
+                                    yield data_received["id"], None
+                            except Exception as e:
+                                logg.error("Failed to decode JSON: %s ****** %s", line, e)
+                        else:
+                            logg.info("Received heartbeat")
+                        buffer = b''
 
     async def close(self):
         logg.info("Closing connection to target at remote tunnel")
