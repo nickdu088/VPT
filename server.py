@@ -87,6 +87,7 @@ async def handle_get(request):
                     # logg.warning("Timeout waiting for message")
                     if request.transport is None or request.transport.is_closing():
                         break
+                    await response.write(b'\n')
                     continue
         except asyncio.CancelledError:
             pass
@@ -128,8 +129,8 @@ def handle_delete(request):
             tunnel_storage.delete_tunnel_info(channel_id)
         return web.Response(status=200)
 
-def handle_options():
-    return web.json_response(tunnel_storage.storage.keys())
+def handle_options(request):
+    return web.json_response(list(tunnel_storage.storage.keys()))
 
 def get_client_ip(request):
     peername = request.transport.get_extra_info('peername')
@@ -154,7 +155,7 @@ app.router.add_options('/', handle_options)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start Tunnel Server")
-    parser.add_argument("-p", default=8000, dest='port', help='Specify port number server will listen to', type=int)
+    parser.add_argument("-p", default=443, dest='port', help='Specify port number server will listen to', type=int)
     args = parser.parse_args()
     logg.info("Starting server on port %s" % args.port)
     web.run_app(app, host='0.0.0.0', port=args.port)
