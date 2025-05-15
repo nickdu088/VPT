@@ -8,8 +8,6 @@ import base64
 import lzma
 from typing import Tuple, AsyncGenerator
 
-import urllib3
-
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
@@ -24,7 +22,6 @@ class TunnelConnection:
         self._timer = None
         timeout = aiohttp.ClientTimeout(total=None)  # Disable timeout
         self.session = aiohttp.ClientSession(timeout=timeout)
-        urllib3.disable_warnings()
 
     def get_settings(self):
         return {"channel": self.id, "port": self.port}
