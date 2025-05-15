@@ -8,6 +8,8 @@ import base64
 import lzma
 from typing import Tuple, AsyncGenerator
 
+import urllib3
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
@@ -19,8 +21,10 @@ class TunnelConnection:
     def __init__(self, connection_id: str = None, port: int = -1):
         self.id = connection_id
         self.port = port
+        self._timer = None
         timeout = aiohttp.ClientTimeout(total=None)  # Disable timeout
         self.session = aiohttp.ClientSession(timeout=timeout)
+        urllib3.disable_warnings()
 
     def get_settings(self):
         return {"channel": self.id, "port": self.port}
@@ -54,6 +58,11 @@ class TunnelConnection:
                 logg.warning("Failed to forward data to remote tunnel: %s", response.reason)
                 return False
 
+    async def _timeout(self, timeout=300, callback=None):
+        await asyncio.sleep(timeout)
+        logg.info("Timeout reached, closing connection")
+        callback() if callback else None
+
     async def receive(self) -> AsyncGenerator[Tuple[str, bytes], None]:
         async with self.session.get(self.get_channel_url()) as response:
             if response.status == 200:
@@ -73,33 +82,40 @@ class TunnelConnection:
                             except Exception as e:
                                 logg.error("Failed to decode JSON: %s ****** %s", line, e)
                         else:
-                            logg.info("Received heartbeat")
+                            if self._timer and not self._timer.done():
+                                self._timer.cancel()
+                            self._timer = asyncio.ensure_future(self._timeout(callback=response.close))
                         buffer = b''
 
     async def close(self):
         logg.info("Closing connection to target at remote tunnel")
         async with self.session.delete(self.get_channel_url()) as response:
             if response.status == 200:
-                self.session.close()
+                await self.session.close()
                 logg.info("Successfully closed connection")
             else:
                 logg.warning("Failed to close connection: %s", response.reason)
 
     async def run(self, remote_addr):
         senders = {}
-        async for id, data in self.receive():
-            if id and not data:
-                if id not in senders:
-                    logg.info("Creating sender %s", id)
-                    sender = TCPProxyClient(remote_addr, id, self)
-                    await sender.connect()
-                    task = asyncio.create_task(sender.run())
-                    senders[id] = (sender, task)
-                else:
-                    logg.info("Closing sender %s", id)
-                    senders[id][1].cancel()
-            elif id and data and id in senders:
-                await senders[id][0].send(data)
+        while True:
+            try:
+                async for id, data in self.receive():
+                    if id and not data:
+                        if id not in senders:
+                            logg.info("Creating sender %s", id)
+                            sender = TCPProxyClient(remote_addr, id, self)
+                            await sender.connect()
+                            task = asyncio.create_task(sender.run())
+                            senders[id] = (sender, task)
+                        else:
+                            logg.info("Closing sender %s", id)
+                            senders[id][1].cancel()
+                    elif id and data and id in senders:
+                        await senders[id][0].send(data)
+            except Exception as e:
+                logg.error("Error in run: %s", e)
+                continue
         await self.close()
 
 class TCPProxyServer:
