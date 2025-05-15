@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import uuid
 from aiohttp import web
 import asyncio
@@ -41,6 +42,7 @@ class ProxyTunnel:
         self.client = None
         self.host_queue = Queue()
         self.client_queue = Queue()
+        self.date_created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def get_settings(self):
         return self.settings
@@ -54,13 +56,16 @@ class ProxyTunnel:
 
     async def get_message(self, addr):
         queue = self.host_queue if addr == self.host else self.client_queue
-        item = await asyncio.wait_for(queue.get(), timeout=5)
+        item = await asyncio.wait_for(queue.get(), timeout=60)
         queue.task_done()
         return item
 
     async def add_message(self, addr, msg):
         queue = self.client_queue if addr == self.host else self.host_queue
         await queue.put(msg)
+
+    def __str__(self):
+        return f"{self.date_created}"
 
 async def handle_get(request):
     channel = get_channel(request)
@@ -86,6 +91,7 @@ async def handle_get(request):
                 except asyncio.TimeoutError:
                     # logg.warning("Timeout waiting for message")
                     if request.transport is None or request.transport.is_closing():
+                        logg.info("Client disconnected")
                         break
                     await response.write(b'\n')
                     continue
