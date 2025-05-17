@@ -130,13 +130,13 @@ async def handle_put(request):
     return web.Response(status=404, text="Resource not found")
 
 def handle_delete(request):
-        channel_id = get_channel_id(request)
-        if channel_id:
-            tunnel_storage.delete_tunnel_info(channel_id)
-        return web.Response(status=200)
+    channel_id = get_channel_id(request)
+    if channel_id:
+        tunnel_storage.delete_tunnel_info(channel_id)
+    return web.Response(status=200)
 
 def handle_options(request):
-    return web.json_response(list(tunnel_storage.storage.keys()))
+    return web.json_response({k: str(v) for k, v in tunnel_storage.storage.items()})
 
 def get_client_ip(request):
     peername = request.transport.get_extra_info('peername')
