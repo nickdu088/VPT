@@ -153,6 +153,7 @@ function handleGet() {
     $channel = getChannel();
     if ($channel !== null) {
         $message = $channel->getMessage(getClientIp());
+        header("Content-Type: application/json");
         echo $message;
         return;
     }
