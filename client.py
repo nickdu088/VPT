@@ -10,7 +10,7 @@ from typing import Tuple
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
-BUFFER = 1024 * 128  # 128KB size buffer
+BUFFER = 1024 * 4  # 4KB size buffer
 TUNNEL_URL = "http://192.168.0.67:9999"
 
 class TunnelConnection:
@@ -37,10 +37,10 @@ class TunnelConnection:
                     logg.info('Successfully created connection: %s', self.get_settings())
                     return True
                 logg.warning('Failed to establish connection: status %s because %s', response.status, response.reason)
-                if self.session:
-                    await self.session.close()
+                await self.session.close()
         except Exception as ex:
             logg.error("Error Creating Connection: %s", ex)
+            await self.session.close()
         return False
 
     async def forward(self, data, id):
@@ -79,24 +79,26 @@ class TunnelConnection:
         while True:
             try:
                 id, data = await self.receive()
-                if id and not data:
-                    if id not in senders:
-                        logg.info("Creating sender %s", id)
-                        sender = TCPProxyClient(remote_addr, id, self)
-                        await sender.connect()
-                        task = asyncio.create_task(sender.run())
-                        senders[id] = (sender, task)
+                if id:
+                    if data:
+                        if id in senders:
+                            await senders[id][0].send(data)
                     else:
-                        logg.info("Closing sender %s", id)
-                        senders[id][1].cancel()
-                        del senders[id]
-                if id and data and id in senders:
-                    await senders[id][0].send(data)
+                        if id not in senders:
+                            logg.info("Creating sender %s", id)
+                            sender = TCPProxyClient(remote_addr, id, self)
+                            await sender.connect()
+                            task = asyncio.create_task(sender.run())
+                            senders[id] = (sender, task)
+                        else:
+                            logg.info("Closing sender %s", id)
+                            senders[id][1].cancel()
+                            del senders[id]
                 else:
                     await asyncio.sleep(1)
             except Exception as ex:
                 logg.error("Error Receiving Data: %s", ex)
-                break
+                continue
 
 class TCPProxyServer:
     def __init__(self, port, connection):
@@ -111,8 +113,9 @@ class TCPProxyServer:
         while True:
             try:
                 id, data = await self.connection.receive()
-                if data:
-                    await self.send(id, data)
+                if data and id in self.senders:
+                    self.senders[id].write(data)
+                    await self.senders[id].drain()
                 else:
                     await asyncio.sleep(1)
             except asyncio.CancelledError:
@@ -130,11 +133,7 @@ class TCPProxyServer:
     async def handle_client(self, reader, writer):
         id = str(writer.__hash__())
         logg.info("New client connected: %s", id)
-        sender = asyncio.create_task(self.handle_connection(reader, writer))
-        self.senders[id] = (writer, sender)
-    
-    async def handle_connection(self, reader, writer):
-        id = str(writer.__hash__())
+        self.senders[id] = writer
         await self.connection.forward(None, id)
         try:
             while True:
@@ -148,13 +147,10 @@ class TCPProxyServer:
         except asyncio.CancelledError:
             pass
         finally:
+            del self.senders[id]
+            writer.close()
             await self.connection.forward(None, id)
     
-    async def send(self, id, data):
-        if id in self.senders:
-            self.senders[id][0].write(data)
-            await self.senders[id][0].drain()
-
 class TCPProxyClient:
     def __init__(self, remote_addr, id, connection):
         self.reader = None
