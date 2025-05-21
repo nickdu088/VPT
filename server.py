@@ -3,6 +3,7 @@ import json
 from queue import Queue
 from uuid import uuid4
 from aiohttp import web
+from aiohttp.typedefs import Handler
 from aiohttp.web import Request, Response
 import argparse
 import logging
@@ -124,8 +125,17 @@ class ProxyRequestHandler():
             del self.channels[id]
         return Response(status=200)
         
+@web.middleware
+async def middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+    if not response.prepared:
+        response.headers["SERVER"] = "cloudflare"
+    return response
 
-app = web.Application()
+app = web.Application(middlewares=[middleware])
 app.router.add_get('/{id}', lambda request: ProxyRequestHandler().do_GET(request))
 app.router.add_post('/', lambda request: ProxyRequestHandler().do_POST(request))
 app.router.add_put('/{id}', lambda request: ProxyRequestHandler().do_PUT(request))
