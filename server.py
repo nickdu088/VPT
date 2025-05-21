@@ -2,6 +2,7 @@ import argparse
 import datetime
 import uuid
 from aiohttp import web
+from aiohttp.typedefs import Handler
 import asyncio
 from asyncio import Queue
 import logging
@@ -152,7 +153,17 @@ def get_channel(request):
     channel_id = get_channel_id(request)
     return tunnel_storage.get_tunnel_info(channel_id)
 
-app = web.Application()
+@web.middleware
+async def middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+    if not response.prepared:
+        response.headers["SERVER"] = "cloudflare"
+    return response
+
+app = web.Application(middlewares=[middleware])
 app.router.add_get('/{id}', handle_get)
 app.router.add_post('/', handle_post)
 app.router.add_put('/{id}', handle_put)
