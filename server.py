@@ -2,6 +2,7 @@ import argparse
 import datetime
 import uuid
 from aiohttp import web
+from aiohttp.abc import AbstractAccessLogger
 from aiohttp.typedefs import Handler
 import asyncio
 from asyncio import Queue
@@ -9,6 +10,13 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
+
+class AccessLogger(AbstractAccessLogger):
+
+    def log(self, request, response, time):
+        self.logger.info (f'{get_client_ip(request)} '
+                         f'"{request.method} {request.path}" '
+                         f'{response.status} "{request.headers["User-Agent"]}"')
 
 class TunnelInfoStorage:
     def set_tunnel_info(self, channel_id, channel):
@@ -64,11 +72,22 @@ class ProxyTunnel:
     async def add_message(self, addr, msg):
         queue = self.client_queue if addr == self.host else self.host_queue
         await queue.put(msg)
+    
+    def clear_messages(self):
+        while not self.client_queue.empty():
+            self.client_queue.get_nowait()
+            self.client_queue.task_done()
+        while not self.host_queue.empty():
+            self.host_queue.get_nowait()
+            self.host_queue.task_done()
 
     def __str__(self):
         return f"{self.date_created}"
 
 async def handle_get(request):
+    channel_id = get_channel_id(request)
+    if channel_id == 'health':
+        return web.Response(status=200)
     channel = get_channel(request)
     if channel:
         response = web.StreamResponse(
@@ -78,6 +97,7 @@ async def handle_get(request):
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache',
                 'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
             },
         )
         await response.prepare(request)
@@ -90,9 +110,9 @@ async def handle_get(request):
                 except ConnectionResetError:
                     break
                 except asyncio.TimeoutError:
-                    # logg.warning("Timeout waiting for message")
                     if request.transport is None or request.transport.is_closing():
-                        logg.info("Client disconnected")
+                        channel.clear_messages()
+                        logg.info("Client transport is closing, clearing messages")
                         break
                     await response.write(b'\n')
                     continue
@@ -100,8 +120,9 @@ async def handle_get(request):
             pass
         finally:
             if request.transport is not None and not request.transport.is_closing():
+                channel.clear_messages()
                 await response.write_eof()
-        return web.Response(status=200, text="OK")
+            return web.Response(status=200, text="OK")
     return web.Response(status=404, text="Resource not found")
 
 async def handle_post(request):
@@ -140,9 +161,18 @@ def handle_options(request):
     return web.json_response({k: str(v) for k, v in tunnel_storage.storage.items()})
 
 def get_client_ip(request):
-    peername = request.transport.get_extra_info('peername')
-    if peername is not None:
-        return peername[0]
+    if request.headers.get('X-Forwarded-For'):
+        # If X-Forwarded-For header is present, use it
+        return request.headers['X-Forwarded-For']
+    elif hasattr(request, 'remote') and request.remote:  # Check if request.remote is available 
+        # If request.remote is available, use it directly
+        # This is typically the case for aiohttp servers
+        # where the remote address is already set.
+        return request.remote
+    elif request.transport and hasattr(request.transport, 'get_extra_info'): # Fallback to transport's peername if request.remote is not available
+        peername = request.transport.get_extra_info('peername')
+        if peername is not None:
+            return peername[0]
     return None
 
 def get_channel_id(request):
@@ -153,17 +183,8 @@ def get_channel(request):
     channel_id = get_channel_id(request)
     return tunnel_storage.get_tunnel_info(channel_id)
 
-@web.middleware
-async def middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
-    try:
-        response = await handler(request)
-    except web.HTTPException as exc:
-        response = exc
-    if not response.prepared:
-        response.headers["SERVER"] = "cloudflare"
-    return response
+app = web.Application()
 
-app = web.Application(middlewares=[middleware])
 app.router.add_get('/{id}', handle_get)
 app.router.add_post('/', handle_post)
 app.router.add_put('/{id}', handle_put)
@@ -175,4 +196,4 @@ if __name__ == "__main__":
     parser.add_argument("-p", default=8000, dest='port', help='Specify port number server will listen to', type=int)
     args = parser.parse_args()
     logg.info("Starting server on port %s" % args.port)
-    web.run_app(app, host='0.0.0.0', port=args.port)
+    web.run_app(app, host='0.0.0.0', port=args.port, access_log_class=AccessLogger)
