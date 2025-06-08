@@ -11,7 +11,7 @@ from typing import Tuple, AsyncGenerator
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(process)s] [%(levelname)s] %(message)s")
 logg = logging.getLogger(__name__)
 
-BUFFER = 128 * 1024  # 128KB size buffer
+BUFFER = 64 * 1024  # 64KB size buffer
 TUNNEL_URL = "http://192.168.0.67:8000"
 
 class TunnelConnection:
@@ -63,26 +63,26 @@ class TunnelConnection:
     async def receive(self) -> AsyncGenerator[Tuple[str, bytes], None]:
         async with self.session.get(self.get_channel_url()) as response:
             if response.status == 200:
-                buffer = b''
-                async for line, end_of_line in response.content.iter_chunks():
-                    buffer += line
-                    if end_of_line:
-                        if buffer != b'\n':
-                            logg.info("Data << from remote tunnel")
-                            try:
-                                data_received = json.loads(buffer)
-                                if "id" in data_received and "data" in data_received:
-                                    compressed_data = base64.b64decode(data_received["data"])
-                                    yield data_received["id"], lzma.decompress(compressed_data)
-                                elif "id" in data_received:
-                                    yield data_received["id"], None
-                            except Exception as e:
-                                logg.error("Failed to decode JSON: %s ****** %s", line, e)
-                        else:
-                            if self._timer and not self._timer.done():
-                                self._timer.cancel()
-                            self._timer = asyncio.ensure_future(self._timeout(callback=response.close))
-                        buffer = b''
+                while True:
+                    line = await response.content.readline()
+                    if not line:
+                        logg.info("Connection closed by remote tunnel")
+                        break
+                    if line == b"\n": # heartbeat
+                        if self._timer and not self._timer.done():
+                            self._timer.cancel()
+                        self._timer = asyncio.ensure_future(self._timeout(callback=response.close))
+                        continue
+                    logg.info("Data << from remote tunnel")
+                    try:
+                        data_received = json.loads(line)
+                        if "id" in data_received and "data" in data_received:
+                            compressed_data = base64.b64decode(data_received["data"])
+                            yield data_received["id"], lzma.decompress(compressed_data)
+                        elif "id" in data_received:
+                            yield data_received["id"], None
+                    except Exception as e:
+                        logg.error("Failed to decode JSON: %s ****** %s", line, e)
 
     async def close(self):
         logg.info("Closing connection to target at remote tunnel")
@@ -108,10 +108,18 @@ class TunnelConnection:
                         else:
                             logg.info("Closing sender %s", id)
                             senders[id][1].cancel()
+                            del senders[id]
                     elif id and data and id in senders:
                         await senders[id][0].send(data)
             except Exception as e:
                 logg.error("Error in run: %s", e)
+                await asyncio.sleep(1)  # Wait 1s before retrying
+                # Check for any sender tasks that are done and clean them up
+                done_ids = [sid for sid, (_, task) in senders.items() if task.done()]
+                for sid in done_ids:
+                    logg.info("Cleaning up finished sender %s", sid)
+                    senders[sid][1].cancel()
+                    del senders[sid]
                 continue
         await self.close()
 
@@ -219,17 +227,25 @@ async def main():
 
     args = parser.parse_args()
 
-    if args.channel:
-        tunnelConnection = TunnelConnection(connection_id=args.channel)
-        if await tunnelConnection.create():
-            server = TCPProxyServer(tunnelConnection.port, tunnelConnection)
-            logg.info(f"Waiting for connection on port {tunnelConnection.port}...")
-            await server.start()
-    elif args.remote:
-        remote_addr = {"host": args.remote.split(":")[0], "port": args.remote.split(":")[1]}
-        tunnelConnection = TunnelConnection(port=remote_addr['port'])
-        if await tunnelConnection.create():
-            await tunnelConnection.run(remote_addr)
+    tunnelConnection = None
+    try:
+        if args.channel:
+            tunnelConnection = TunnelConnection(connection_id=args.channel)
+            if await tunnelConnection.create():
+                server = TCPProxyServer(tunnelConnection.port, tunnelConnection)
+                logg.info(f"Waiting for connection on port {tunnelConnection.port}...")
+                await server.start()
+        elif args.remote:
+            remote_addr = {"host": args.remote.split(":")[0], "port": args.remote.split(":")[1]}
+            tunnelConnection = TunnelConnection(port=remote_addr['port'])
+            if await tunnelConnection.create():
+                await tunnelConnection.run(remote_addr)
+    finally:
+        if tunnelConnection is not None:
+            await tunnelConnection.session.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logg.info("Interrupted by user. Exiting gracefully.")
