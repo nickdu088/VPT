@@ -61,6 +61,7 @@ class ProxyTunnel:
 
     def set_client(self, client):
         self.client = client
+        self.clear_messages()
         return True
 
     async def get_message(self, addr):
@@ -107,21 +108,21 @@ async def handle_get(request):
                 try:
                     message = await channel.get_message(get_client_ip(request))
                     await response.write(message)
+                    await response.write(b'\n')
                 except ConnectionResetError:
                     break
                 except asyncio.TimeoutError:
                     if request.transport is None or request.transport.is_closing():
-                        channel.clear_messages()
-                        logg.info("Client transport is closing, clearing messages")
+                        logg.info(f"{get_client_ip(request)} is closed, clearing messages")
                         break
+                    logg.info(f"{get_client_ip(request)} send heartbeat")
                     await response.write(b'\n')
                     continue
         except asyncio.CancelledError:
             pass
         finally:
-            if request.transport is not None and not request.transport.is_closing():
-                channel.clear_messages()
-                await response.write_eof()
+            channel.clear_messages()
+            await response.write_eof()
             return web.Response(status=200, text="OK")
     return web.Response(status=404, text="Resource not found")
 
