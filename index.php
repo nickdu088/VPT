@@ -87,20 +87,20 @@ class ProxyTunnel {
     }
 }
 
-// function cleanUpSessions() {
-//     global $tunnelStorage;
-//     foreach ($_SESSION as $channel_id => $channel) {
-//         if ($channel instanceof ProxyTunnel) {
-//             // Check if the tunnel is older than 1 hour
-//             $date_created = new DateTime($channel->date_created);
-//             $now = new DateTime();
-//             $interval = $now->diff($date_created);
-//             if ($interval->h >= 1) {
-//                 $tunnelStorage->deleteTunnelInfo($channel_id);
-//             }
-//         }
-//     }
-// }
+function cleanUpSessions() {
+    global $tunnelStorage;
+    foreach ($_SESSION as $channel_id => $channel) {
+        if ($channel instanceof ProxyTunnel) {
+            // Check if the tunnel is older than 1 hour
+            $date_created = new DateTime($channel->date_created);
+            $now = new DateTime();
+            $interval = $now->diff($date_created);
+            if ($interval->days >= 7) {
+                $tunnelStorage->deleteTunnelInfo($channel_id);
+            }
+        }
+    }
+}
 
 // // Run the cleanup task every hour
 // if (!isset($_SESSION['last_cleanup']) || (time() - $_SESSION['last_cleanup']) > 3600) {
@@ -182,6 +182,8 @@ function handlePost() {
                 return;
             }
         } elseif (isset($json['port']) && $json['port'] != -1) {
+            // Create a new channel
+            cleanUpSessions(); // Clean up old sessions before creating a new one
             $channel_id = uuidv4();
             $settings = [
                 'channel' => $channel_id,
