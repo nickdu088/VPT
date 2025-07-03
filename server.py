@@ -135,6 +135,7 @@ async def handle_post(request):
             channel.set_client(get_client_ip(request))
             return web.json_response(channel.get_settings())
     elif 'port' in data and data['port'] != -1:
+        cleanup_tunnels()
         channel_id = str(uuid.uuid4())
         settings = {
             'channel': channel_id,
@@ -151,6 +152,13 @@ async def handle_put(request):
         await channel.add_message(get_client_ip(request), await request.read())
         return web.Response(status=200)
     return web.Response(status=404, text="Resource not found")
+
+def cleanup_tunnels():
+    now = datetime.datetime.now()
+    for channel_id, channel in list(tunnel_storage.storage.items()):
+        if (now - datetime.datetime.strptime(channel.date_created, "%Y-%m-%d %H:%M:%S")).days > 7:
+            logg.info(f"Cleaning up tunnel {channel_id} created at {channel.date_created}")
+            tunnel_storage.delete_tunnel_info(channel_id)
 
 def handle_delete(request):
     channel_id = get_channel_id(request)
